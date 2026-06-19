@@ -1,0 +1,1 @@
+"""Softgames payments ETL."""
