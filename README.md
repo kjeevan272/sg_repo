@@ -1,6 +1,5 @@
 # Softgames Payments Data Engineering Solution
 
-<<<<<<< HEAD
 ## Overview
 =======
 ETL pipeline that processes payment transactions and delivers revenue analytics.
@@ -10,16 +9,14 @@ ETL pipeline that processes payment transactions and delivers revenue analytics.
 Fetch payment data from API → store raw in S3 → transform to Delta tables → expose KPIs via Athena.
 
 **Stack:** Airflow · PySpark · Delta Lake · S3
->>>>>>> a33de2034293aca1312f3a98283d471247838911
+
 
 This solution builds a scalable payment data platform that ingests payment transactions from a provider API, processes them through a medallion architecture, and delivers analytics-ready datasets for business users.
 
-<<<<<<< HEAD
----
 
 # Solution Architecture
 
-```text
+```
                 +--------------------+
                 |  Payment Provider  |
                 |       API          |
@@ -394,4 +391,4 @@ Open http://localhost:8080 → trigger `payments_etl` DAG
 - Quarantine for failed contracts
 - GDPR deletion with Bloom filters
 - Slack alerts on anomalies
->>>>>>> a33de2034293aca1312f3a98283d471247838911
+
