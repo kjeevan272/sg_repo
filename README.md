@@ -1,394 +1,242 @@
-# Softgames Payments Data Engineering Solution
-
-## Overview
-=======
-ETL pipeline that processes payment transactions and delivers revenue analytics.
-
-## What
-
-Fetch payment data from API → store raw in S3 → transform to Delta tables → expose KPIs via Athena.
-
-**Stack:** Airflow · PySpark · Delta Lake · S3
 
 
-This solution builds a scalable payment data platform that ingests payment transactions from a provider API, processes them through a medallion architecture, and delivers analytics-ready datasets for business users.
+## Solution Overview
 
+This solution builds a scalable payment analytics platform that ingests payment transactions from a provider API, processes them through a Medallion Architecture (Bronze, Silver, Gold), and delivers business-ready datasets for reporting and analytics.
 
-# Solution Architecture
+The goal is to provide accurate daily revenue reporting, transaction monitoring, financial reconciliation, and operational visibility while maintaining scalability, reliability, security, and cost efficiency.
 
-```
-                +--------------------+
-                |  Payment Provider  |
-                |       API          |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | Python Ingestion   |
-                | Validation Layer   |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | S3 Bronze Layer    |
-                | Raw JSON Files     |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | PySpark Transform  |
-                | Deduplication      |
-                | Data Quality       |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | Silver Layer       |
-                | Delta Tables       |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | Gold Layer         |
-                | Fact & Dimensions  |
-                | KPI Aggregations   |
-                +---------+----------+
-                          |
-                          v
-                +--------------------+
-                | Athena / BI Tools  |
-                | Business Users     |
-                +--------------------+
+---
+
+# High Level Architecture
+
+```text
+Payment API
+    |
+    v
+Python Ingestion
+    |
+    v
+S3 Bronze Layer (Raw JSON)
+    |
+    v
+PySpark Transformations
+    |
+    v
+Silver Layer (Clean Delta Tables)
+    |
+    v
+Gold Layer (Facts, Dimensions, KPIs)
+    |
+    v
+Athena / BI Dashboard / Analysts
 ```
 
 ---
 
-# End-to-End Data Flow
+# Design Approach
 
-1. Payment data is retrieved from the provider API.
-2. Raw data is stored in S3 Bronze layer.
-3. Data validation checks are applied.
-4. Invalid records are moved to quarantine.
-5. PySpark transforms and cleans the data.
-6. Duplicate transactions are removed.
-7. Delta Lake MERGE updates changed records.
-8. Silver tables store cleansed transaction data.
-9. Gold tables create business-ready datasets.
-10. Athena and BI tools query the final data.
+## Why Medallion Architecture?
 
----
+The Medallion Architecture separates data into multiple layers.
 
-# Key Components
+### Bronze Layer
+Stores raw source data exactly as received.
 
-## Ingestion
+Benefits:
+- Supports auditing
+- Allows replaying historical data
+- Preserves source records
 
-### What
-Fetch payment data from the provider API and store raw files in S3.
+### Silver Layer
+Stores cleaned and validated data.
 
-### Why
-Preserve original source data for auditing and replay purposes.
+Benefits:
+- Removes duplicates
+- Standardizes formats
+- Applies business rules
 
-### Outcome
-Reliable and traceable raw data storage.
+### Gold Layer
+Stores business-ready reporting tables.
 
----
-
-## Data Validation
-
-### What
-Validate incoming records using Pydantic models.
-
-### Why
-Ensure only valid data enters the processing pipeline.
-
-### Outcome
-Improved data quality and reduced downstream issues.
+Benefits:
+- Faster reporting
+- Simplified analytics
+- Self-service access for business users
 
 ---
 
-## Quarantine Process
+# Solution Components
 
-### What
-Store invalid records separately.
-
-### Why
-Prevent bad data from impacting reporting.
-
-### Outcome
-Easy investigation and recovery of problematic records.
-
----
-
-## Bronze to Silver Processing
-
-### What
-Transform raw JSON into Delta tables using PySpark.
-
-### Why
-Create a clean and standardized transaction dataset.
-
-### Outcome
-Reliable and analytics-ready transaction records.
-
----
-
-## Deduplication
-
-### What
-Remove duplicate transactions using transaction identifiers.
-
-### Why
-Prevent revenue inflation and inaccurate reporting.
-
-### Outcome
-Accurate transaction counts and revenue calculations.
+| Functionality | What | Why | Impact | Outcome |
+|------------|------|------|---------|---------|
+| Ingestion | Pull payment data from API and store in S3 | Capture source data reliably | Creates a single source of truth | Auditable raw data storage |
+| Data Validation | Validate records using Pydantic contracts | Prevent bad data entering pipeline | Reduces downstream failures | Higher data quality |
+| Schema Evolution | Detect schema changes automatically | APIs can add or modify fields | Prevents pipeline breakage | Safe schema management |
+| Quarantine | Store invalid records separately | Avoid stopping entire pipeline | Faster debugging and recovery | Fault-tolerant processing |
+| Bronze Layer | Store raw JSON data | Preserve original records | Supports auditing and replay | Immutable raw data layer |
+| Silver Layer | Clean, standardize and transform data | Raw data is not analytics-ready | Improves consistency | Trusted transaction dataset |
+| Deduplication | Remove duplicate transactions | Avoid double counting revenue | Improves reporting accuracy | Correct metrics |
+| Delta MERGE | Upsert records using transaction_id | Handle late arrivals and updates | Maintains current transaction state | Accurate historical records |
+| Currency Conversion | Convert amounts to EUR | Standardize multiple currencies | Enables financial reporting | Consistent revenue metrics |
+| Gold Layer | Create facts, dimensions and KPIs | Support business reporting | Simplifies analytics | Business-ready datasets |
+| Data Quality Checks | Apply validation and business rules | Detect issues early | Prevents bad data propagation | Trusted reports |
+| Referential Integrity | Validate fact-to-dimension relationships | Ensure data consistency | Prevents missing references | Accurate reporting |
+| Audit Tables | Track pipeline executions and row counts | Improve observability | Simplifies troubleshooting | Full operational visibility |
+| Watermarking | Track processed files and dates | Prevent duplicate processing | Supports re-runs safely | Exactly-once processing |
+| Late Data Handling | Reprocess recent days | Capture refunds and updates | Keeps reports current | Accurate KPIs |
+| Retry Mechanism | Retry failed records automatically | Handle temporary failures | Improves reliability | Higher success rate |
+| Dead Letter Queue | Store permanently failed records | Enable manual investigation | Reduces data loss | Recoverable failures |
+| Delta Lake | Use ACID-compliant storage | Support updates and versioning | Improves reliability | Enterprise-grade data lake |
+| Airflow | Orchestrate ETL workflow | Manage scheduling and dependencies | Automates operations | Reliable execution |
+| Monitoring | CloudWatch metrics and alerts | Detect issues quickly | Reduces downtime | Proactive monitoring |
+| Slack Alerts | Send failure notifications | Improve incident response | Faster issue resolution | Better operational support |
+| Security | Encryption and access controls | Protect sensitive data | Reduces compliance risk | Secure platform |
+| Governance | Metadata, lineage and auditing | Improve transparency | Easier compliance reporting | Better governance |
+| Cost Optimization | Lambda/DuckDB for small volumes and Spark for large volumes | Avoid overprovisioning | Reduces infrastructure costs | Cost-efficient processing |
+| Multi-Tenant Design | Support multiple games/providers | Enable future growth | Improves scalability | Reusable platform |
+| KPI Aggregations | Generate daily revenue metrics | Support business decisions | Faster analytics | Actionable insights |
+| Athena Reporting | Query gold datasets | Enable self-service analytics | Reduces engineering dependency | Faster reporting |
+| Data Lineage | Track data movement across layers | Improve traceability | Easier root-cause analysis | Better observability |
 
 ---
 
-## Delta Lake Merge Strategy
+# Understanding Key Concepts
 
-### What
-Use MERGE operations based on transaction_id.
+## What is Delta Lake?
 
-### Why
-Handle late-arriving records and status updates.
+Delta Lake is a storage layer built on top of S3.
 
-### Outcome
-Accurate and up-to-date transaction history.
+It provides:
 
----
+- ACID transactions
+- Data versioning
+- Time travel
+- Efficient MERGE operations
+- Schema enforcement
 
-## Gold Layer
+Why important?
 
-### What
-Create fact tables, dimensions, and aggregated KPI tables.
-
-### Why
-Support business reporting and analytics.
-
-### Outcome
-Fast and easy access to revenue metrics.
+Without Delta Lake, updating transactions and handling late-arriving records becomes difficult and unreliable.
 
 ---
 
-## Currency Conversion
+## What is MERGE?
 
-### What
-Convert transactions into EUR using daily exchange rates.
+MERGE updates existing records and inserts new records in a single operation.
 
-### Why
-Standardize reporting across currencies.
+Example:
 
-### Outcome
-Consistent financial reporting.
+Transaction 123 arrives with status = Pending.
 
----
+Later the same transaction arrives with status = Success.
 
-## Data Quality Framework
-
-### What
-Implement reusable validation and business rules.
-
-### Why
-Maintain trust in analytical datasets.
-
-### Outcome
-Consistent quality monitoring.
+MERGE updates the existing record instead of creating duplicates.
 
 ---
 
-## Audit and Metadata Tables
+## What is Deduplication?
 
-### What
-Track pipeline executions, row counts, and processing status.
+Duplicate records can occur due to:
 
-### Why
-Support monitoring and troubleshooting.
+- API retries
+- Pipeline reruns
+- Source system issues
 
-### Outcome
-Improved operational visibility.
-
----
-
-## Exactly-Once Processing
-
-### What
-Use watermarks and ingestion tracking.
-
-### Why
-Prevent duplicate processing.
-
-### Outcome
-Reliable and repeatable data loads.
+Deduplication ensures only one version of a transaction exists.
 
 ---
 
-## Late Arriving Data Handling
+## What is Watermarking?
 
-### What
-Reprocess recent historical data.
+Watermarks track processed files and dates.
 
-### Why
-Capture transaction updates and corrections.
+Purpose:
 
-### Outcome
-Accurate reporting over time.
-
----
-
-## Monitoring and Alerting
-
-### What
-CloudWatch alarms and Slack notifications.
-
-### Why
-Detect failures quickly.
-
-### Outcome
-Reduced incident response time.
+- Prevent duplicate processing
+- Support backfills safely
+- Enable exactly-once processing
 
 ---
 
-## Security and Governance
+## What is a Dead Letter Queue?
 
-### What
-Encryption, access controls, and data masking.
+A storage location for records that repeatedly fail processing.
 
-### Why
-Protect sensitive payment information.
+Benefits:
 
-### Outcome
-Secure and compliant platform.
+- No data loss
+- Easy investigation
+- Supports reprocessing later
 
 ---
 
-## Airflow Orchestration
+## What is a Star Schema?
 
-### What
-Manage workflow scheduling and dependencies.
+A reporting model consisting of:
 
-### Why
-Automate end-to-end processing.
+Fact Table:
+- Stores transactions
 
-### Outcome
-Reliable and maintainable ETL execution.
+Dimension Tables:
+- Game
+- Currency
+- Date
+
+Benefits:
+
+- Faster queries
+- Simpler reporting
+- Better performance in Athena
 
 ---
 
 # Data Model
 
-## Fact Table
+Fact Table
 
-### fact_payment_transaction
-- Transaction ID
-- Game ID
-- Currency
-- Amount
-- EUR Amount
-- Transaction Status
-- Transaction Date
+fact_payment_transaction
 
-## Dimension Tables
+Dimensions
 
-### dim_game
-Stores game attributes.
+- dim_game
+- dim_currency
+- dim_date
+- fx_rate_daily
 
-### dim_currency
-Stores currency details.
+Aggregations
 
-### dim_date
-Stores calendar information.
+- agg_game_daily_revenue
 
-### fx_rate_daily
-Stores daily exchange rates.
+Operational Tables
+
+- pipeline_metrics
+- ingestion_state
+- retry_queue
 
 ---
 
-# Technologies Used
+# Technology Stack
 
 - Python
 - PySpark
 - Apache Airflow
 - AWS S3
-- AWS Glue Catalog
 - AWS Athena
+- AWS Glue Catalog
 - Delta Lake
 - CloudWatch
-- Slack Alerts
+- Slack
 - Terraform
 
 ---
 
 # Business Benefits
 
-- Automated payment data ingestion
-- High-quality and trusted reporting
-- Scalable architecture for future growth
-- Cost-optimized processing
-- Improved operational monitoring
-- Secure and compliant data platform
-=======
-```
-API → bronze (raw) → silver (cleaned) → gold (analytics) → BI
-```
-
-- **Bronze**: immutable raw records, partitioned by date + run_id
-- **Silver**: deduplicated Delta tables with MERGE upserts, tracks dimension changes (SCD2)
-- **Gold**: business tables (transactions, dimensions, aggregates for analysts)
-
-## Why This Approach
-
-- **Medallion pattern** = clear separation of concerns (capture, clean, analyze)
-- **Delta Lake MERGE** = no rebuilding pipelines, natural CDC + time travel
-- **Idempotent design** = safe to retry/backfill using `run_id` keys
-- **Schema contracts** (Pydantic) = catch drift before warehouse is affected
-
-## Outcomes / KPIs
-
-- Daily revenue per game (EUR-normalized, multi-currency)
-- Success rate (% of successful transactions)
-- Rolling windows: 7d, 28d revenue + week-over-week %
-- Revenue anomaly alerts (z-score)
-- Audit trail on dimension changes (valid_from/to timestamps)
-
-## Repo Layout
-
-```
-dags/                      Airflow orchestration
-src/sg_payments/
-  ├─ contracts.py          Pydantic schemas (single source of truth)
-  ├─ ingest.py             API fetch → S3 bronze
-  ├─ bronze_to_silver.py   PySpark + Delta MERGE
-  ├─ silver_to_gold.py     Star schema facts & dims
-  └─ dq.py                 Data quality checks
-sql/ddl/                   Table definitions
-tests/                     Unit & integration tests
-infra/terraform/           S3, Glue catalog, IAM
-```
-
-## Local Setup
-
-```bash
-pip install -e ".[dev]"
-make local-up    # LocalStack (S3 + Secrets)
-make test        # Run tests
-```
-
-Open http://localhost:8080 → trigger `payments_etl` DAG
-
-## Design Choices
-
-| Choice | Rationale |
-|--------|-----------|
-| Delta over Iceberg | Better Spark integration; CDC + SCD2 built-in |
-| Star schema | Simpler queries for analysts; dims don't justify snowflake |
-| AWS Glue | Serverless, cost-effective for short-running jobs |
-| Pydantic contracts | Single source of truth; fail fast on schema drift |
-
-## Roadmap
-
-- Watermark table (skip re-fetching same data)
-- Quarantine for failed contracts
-- GDPR deletion with Bloom filters
-- Slack alerts on anomalies
-
+- Automated payment reporting
+- Improved data quality
+- Accurate revenue calculations
+- Faster analytics
+- Reduced operational effort
+- Secure and scalable architecture
+- Lower infrastructure costs
