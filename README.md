@@ -1,108 +1,75 @@
 # Softgames Payments — Data Engineer Assignment
 
-Production-grade ETL pipeline for payment provider data. Ingests JSON from a REST API,
-lands it in S3, transforms with PySpark into a Delta Lake lakehouse following the
-**Medallion architecture** (bronze → silver → gold), and exposes analyst-ready KPI marts.
-Orchestrated with Airflow.
+ETL pipeline that processes payment transactions and delivers revenue analytics.
+
+## What
+
+Fetch payment data from API → store raw in S3 → transform to Delta tables → expose KPIs via Athena.
+
+**Stack:** Airflow · PySpark · Delta Lake · S3
 
 ## Architecture
 
 ```
-Payment API
-    │  (pydantic contract + retry/backoff)
-    ▼
-S3 bronze/raw/dt=YYYY-MM-DD/run_id=<airflow_run>/payments.json.gz   (immutable)
-    │  PySpark + Great Expectations  (schema enforcement, DQ gates)
-    ▼
-S3 silver/payments/   Delta table  (MERGE upserts, CDC enabled, SCD2 dims)
-    │  Spark SQL
-    ▼
-S3 gold/
-  ├─ fact_payment_transaction    (grain: 1 row per txn, status-change CDC)
-  ├─ dim_game (SCD2) · dim_currency · dim_date · fx_rate_daily
-  └─ agg_game_daily_revenue      (analyst mart: revenue, success_rate, ARPPU…)
-    ▼
-Athena / Redshift Spectrum  →  BI
+API → bronze (raw) → silver (cleaned) → gold (analytics) → BI
 ```
 
-## What's in the repo
+- **Bronze**: immutable raw records, partitioned by date + run_id
+- **Silver**: deduplicated Delta tables with MERGE upserts, tracks dimension changes (SCD2)
+- **Gold**: business tables (transactions, dimensions, aggregates for analysts)
 
-| Path | Purpose |
-|---|---|
-| `dags/payments_etl.py` | Airflow DAG — TaskFlow, dynamic mapping, idempotent backfill |
-| `src/sg_payments/contracts.py` | Pydantic v2 data contract — fail-fast on schema drift |
-| `src/sg_payments/ingest.py` | API → S3 bronze. Retries, backoff, manifest + checksum |
-| `src/sg_payments/bronze_to_silver.py` | PySpark JSON → Delta. AQE, skew handling, MERGE |
-| `src/sg_payments/silver_to_gold.py` | Star-schema fact + dims + KPI mart |
-| `src/sg_payments/dq.py` | Great Expectations suite — not_null, unique, ranges, enums |
-| `sql/ddl/` | Table DDL (fact, dims, marts) |
-| `tests/` | pytest + chispa unit tests, DAG integrity test |
-| `infra/terraform/` | S3 bucket, Glue DB, IAM least-privilege roles |
+## Why This Approach
 
-## Data model (star schema)
+- **Medallion pattern** = clear separation of concerns (capture, clean, analyze)
+- **Delta Lake MERGE** = no rebuilding pipelines, natural CDC + time travel
+- **Idempotent design** = safe to retry/backfill using `run_id` keys
+- **Schema contracts** (Pydantic) = catch drift before warehouse is affected
 
-- **fact_payment_transaction** — `transaction_id` PK, `game_key`, `date_key`,
-  `currency_key`, `price`, `price_eur`, `status`, `ingest_ts`, `valid_from/to`, `is_current`
-- **dim_game** — SCD2 (genre, studio can change)
-- **dim_currency** + **fx_rate_daily** — multi-currency normalization to EUR
-- **dim_date** — conformed
-- **agg_game_daily_revenue** — gold mart: gross_revenue_eur, success_rate, txn counts,
-  7d/28d rolling, WoW %, currency mix
+## Outcomes / KPIs
 
-## Business KPIs surfaced
+- Daily revenue per game (EUR-normalized, multi-currency)
+- Success rate (% of successful transactions)
+- Rolling windows: 7d, 28d revenue + week-over-week %
+- Revenue anomaly alerts (z-score)
+- Audit trail on dimension changes (valid_from/to timestamps)
 
-- Daily gross revenue (EUR-normalized) per game
-- Payment success rate = success / (success + error)
-- 7d / 28d rolling revenue, WoW % change
-- Top-N games by revenue, currency mix
-- Anomaly z-score on daily revenue (freshness + outlier alerts)
-- ARPPU (roadmap — requires user_id from provider)
+## Repo Layout
 
-## Engineering choices that matter
+```
+dags/                      Airflow orchestration
+src/sg_payments/
+  ├─ contracts.py          Pydantic schemas (single source of truth)
+  ├─ ingest.py             API fetch → S3 bronze
+  ├─ bronze_to_silver.py   PySpark + Delta MERGE
+  ├─ silver_to_gold.py     Star schema facts & dims
+  └─ dq.py                 Data quality checks
+sql/ddl/                   Table definitions
+tests/                     Unit & integration tests
+infra/terraform/           S3, Glue catalog, IAM
+```
 
-- **Contract-first ingestion** (`pydantic`) — drift fails the DAG, not the analyst
-- **Schema enforcement** in Spark via explicit `StructType` (never `inferSchema`)
-- **Delta Lake** — `MERGE INTO` for upserts → free CDC + SCD2 + time travel
-- **Idempotency** — S3 keys include `run_id`; Delta MERGE on `transaction_id`
-- **Same DAG = full + incremental** via Airflow dynamic task mapping over date range
-- **Performance** — AQE, coalescePartitions, skewJoin, salting for whale games,
-  partition by `payment_date`, Z-order by `game`, broadcast small dims, `OPTIMIZE` + `VACUUM`
-- **Observability** — OpenLineage events, freshness SLA, row-count anomaly checks
-- **Governance** — Secrets Manager, IAM per-task roles, S3 lifecycle bronze→Glacier 90d
-
-## Local dev
+## Local Setup
 
 ```bash
 pip install -e ".[dev]"
-pre-commit install
-<<<<<<< HEAD
-make local-up && make seed     # LocalStack S3 + Secrets Manager
-make test                       # ruff + black + mypy + pytest
+make local-up    # LocalStack (S3 + Secrets)
+make test        # Run tests
 ```
 
-Open http://localhost:8080 for the Airflow UI; trigger `payments_etl`.
+Open http://localhost:8080 → trigger `payments_etl` DAG
 
-## Extras (v0.2.0)
+## Design Choices
 
-- **Exactly-once watermark** (`_ingestion_state` Delta table) — skip re-fetch on same checksum
-- **Quarantine** for contract failures → S3 prefix with the validation error attached
-- **Pydantic → Spark schema generator** — single source of truth (contract, Spark, Glue)
-- **Salted join** helper for whale-game skew
-- **Bloom filter + deletion vectors** on silver (GDPR erasure + faster MERGE)
-- **KPI anomaly z-score view** with `OK / WARN / ALERT` severity
-- **Slack `on_failure_callback`** + 7-day restatement task
-- **ADRs** in `docs/decisions/` documenting Delta, MERGE, Airflow choices
-- **CI**: ruff, black, mypy, pytest, terraform validate, checkov
+| Choice | Rationale |
+|--------|-----------|
+| Delta over Iceberg | Better Spark integration; CDC + SCD2 built-in |
+| Star schema | Simpler queries for analysts; dims don't justify snowflake |
+| AWS Glue | Serverless, cost-effective for short-running jobs |
+| Pydantic contracts | Single source of truth; fail fast on schema drift |
 
-=======
-pytest
-ruff check . && black --check . && mypy src
-```
+## Roadmap
 
->>>>>>> 7f7dbd942ad1ffb213d1713f56ab5560768d557c
-## Trade-offs
-
-- **Delta vs Iceberg** — chose Delta for tighter Spark integration and simpler CDC.
-  Iceberg would be the pick if multi-engine (Trino/Flink) is a near-term need.
-- **Star vs snowflake** — star; dim cardinality doesn't justify normalization.
-- **EMR vs Glue** — Glue jobs for serverless ops; EMR if job runtime > 30 min.
+- Watermark table (skip re-fetching same data)
+- Quarantine for failed contracts
+- GDPR deletion with Bloom filters
+- Slack alerts on anomalies
