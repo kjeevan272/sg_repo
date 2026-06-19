@@ -1,118 +1,321 @@
-# Softgames Payments — Data Engineer Assignment
+# Softgames Payments Data Engineering Solution
 
-Production-grade ETL pipeline for payment provider data. Ingests JSON from a REST API,
-lands it in S3, transforms with PySpark into a Delta Lake lakehouse following the
-**Medallion architecture** (bronze → silver → gold), and exposes analyst-ready KPI marts.
-Orchestrated with Airflow.
+## Overview
 
-## Architecture
+This solution builds a scalable payment data platform that ingests payment transactions from a provider API, processes them through a medallion architecture, and delivers analytics-ready datasets for business users.
 
-```
-Payment API
-    │  (pydantic contract + retry/backoff)
-    ▼
-S3 bronze/raw/dt=YYYY-MM-DD/run_id=<airflow_run>/payments.json.gz   (immutable)
-    │  PySpark + Great Expectations  (schema enforcement, DQ gates)
-    ▼
-S3 silver/payments/   Delta table  (MERGE upserts, CDC enabled, SCD2 dims)
-    │  Spark SQL
-    ▼
-S3 gold/
-  ├─ fact_payment_transaction    (grain: 1 row per txn, status-change CDC)
-  ├─ dim_game (SCD2) · dim_currency · dim_date · fx_rate_daily
-  └─ agg_game_daily_revenue      (analyst mart: revenue, success_rate, ARPPU…)
-    ▼
-Athena / Redshift Spectrum  →  BI
-```
+---
 
-## What's in the repo
+# Solution Architecture
 
-| Path | Purpose |
-|---|---|
-| `dags/payments_etl.py` | Airflow DAG — TaskFlow, dynamic mapping, idempotent backfill |
-| `src/sg_payments/contracts.py` | Pydantic v2 data contract — fail-fast on schema drift |
-| `src/sg_payments/ingest.py` | API → S3 bronze. Retries, backoff, manifest + checksum |
-| `src/sg_payments/bronze_to_silver.py` | PySpark JSON → Delta. AQE, skew handling, MERGE |
-| `src/sg_payments/silver_to_gold.py` | Star-schema fact + dims + KPI mart |
-| `src/sg_payments/dq.py` | Great Expectations suite — not_null, unique, ranges, enums |
-| `sql/ddl/` | Table DDL (fact, dims, marts) |
-| `tests/` | pytest + chispa unit tests, DAG integrity test |
-| `infra/terraform/` | S3 bucket, Glue DB, IAM least-privilege roles |
-
-## Data model (star schema)
-
-- **fact_payment_transaction** — `transaction_id` PK, `game_key`, `date_key`,
-  `currency_key`, `price`, `price_eur`, `status`, `ingest_ts`, `valid_from/to`, `is_current`
-- **dim_game** — SCD2 (genre, studio can change)
-- **dim_currency** + **fx_rate_daily** — multi-currency normalization to EUR
-- **dim_date** — conformed
-- **agg_game_daily_revenue** — gold mart: gross_revenue_eur, success_rate, txn counts,
-  7d/28d rolling, WoW %, currency mix
-
-## Business KPIs surfaced
-
-- Daily gross revenue (EUR-normalized) per game
-- Payment success rate = success / (success + error)
-- 7d / 28d rolling revenue, WoW % change
-- Top-N games by revenue, currency mix
-- Anomaly z-score on daily revenue (freshness + outlier alerts)
-- ARPPU (roadmap — requires user_id from provider)
-
-## Engineering choices that matter
-
-- **Contract-first ingestion** (`pydantic`) — drift fails the DAG, not the analyst
-- **Schema enforcement** in Spark via explicit `StructType` (never `inferSchema`)
-- **Delta Lake** — `MERGE INTO` for upserts → free CDC + SCD2 + time travel
-- **Idempotency** — S3 keys include `run_id`; Delta MERGE on `transaction_id`
-- **Same DAG = full + incremental** via Airflow dynamic task mapping over date range
-- **Performance** — AQE, coalescePartitions, skewJoin, salting for whale games,
-  partition by `payment_date`, Z-order by `game`, broadcast small dims, `OPTIMIZE` + `VACUUM`
-- **Observability** — OpenLineage events, freshness SLA, row-count anomaly checks
-- **Governance** — Secrets Manager, IAM per-task roles, S3 lifecycle bronze→Glacier 90d
-
-## Local dev
-
-```bash
-pip install -e ".[dev]"
-pre-commit install
-make local-up && make seed     # LocalStack S3 + Secrets Manager
-make test                       # ruff + black + mypy + pytest
+```text
+                +--------------------+
+                |  Payment Provider  |
+                |       API          |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | Python Ingestion   |
+                | Validation Layer   |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | S3 Bronze Layer    |
+                | Raw JSON Files     |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | PySpark Transform  |
+                | Deduplication      |
+                | Data Quality       |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | Silver Layer       |
+                | Delta Tables       |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | Gold Layer         |
+                | Fact & Dimensions  |
+                | KPI Aggregations   |
+                +---------+----------+
+                          |
+                          v
+                +--------------------+
+                | Athena / BI Tools  |
+                | Business Users     |
+                +--------------------+
 ```
 
-Open http://localhost:8080 for the Airflow UI; trigger `payments_etl`.
+---
 
-## Extras (v0.2.0)
+# End-to-End Data Flow
 
-- **Exactly-once watermark** (`_ingestion_state` Delta table) — skip re-fetch on same checksum
-- **Quarantine** for contract failures → S3 prefix with the validation error attached
-- **Pydantic → Spark schema generator** — single source of truth (contract, Spark, Glue)
-- **Salted join** helper for whale-game skew
-- **Bloom filter + deletion vectors** on silver (GDPR erasure + faster MERGE)
-- **KPI anomaly z-score view** with `OK / WARN / ALERT` severity
-- **Slack `on_failure_callback`** + 7-day restatement task
-- **ADRs** in `docs/decisions/` documenting Delta, MERGE, Airflow choices
-- **CI**: ruff, black, mypy, pytest, terraform validate, checkov
+1. Payment data is retrieved from the provider API.
+2. Raw data is stored in S3 Bronze layer.
+3. Data validation checks are applied.
+4. Invalid records are moved to quarantine.
+5. PySpark transforms and cleans the data.
+6. Duplicate transactions are removed.
+7. Delta Lake MERGE updates changed records.
+8. Silver tables store cleansed transaction data.
+9. Gold tables create business-ready datasets.
+10. Athena and BI tools query the final data.
 
-## Reliability & analytics layer (v0.3.0)
+---
 
-- **Declarative DQ suite** (`dq/expectations.py`) with `fail / quarantine / warn` severities
-- **Referential integrity + reconciliation** (`dq/referential.py`) — FK orphans, silver↔gold totals
-- **Pipeline metrics** (`metrics.py`) — per-task `in/out/rejected/quarantined`; detects
-  "succeeded but rows not processed" via a balance assertion
-- **Schema evolution gate** (`schema_evolution.py`) — additive-nullable allowed; rename/retype blocked
-- **Row-level retry queue** (`retry_queue.py`) — exponential backoff, dead-letter after N attempts
-- **Structured JSON logging + OpenLineage** (`logging_setup.py`) — CloudWatch Insights + Marquez
-- **SLO views** (`sql/marts/slo_views.sql`) — freshness, completeness, accuracy
-- **CloudWatch alarms** (`infra/terraform/monitoring.tf`) on all three SLOs → SNS
-- **Security** (`infra/terraform/security.tf`) — KMS-CMK, Lake Formation masking, SSM, VPC endpoints
-- **Two cost tiers** — Spark/Delta vs Lambda+DuckDB (`serverless/`), routed by volume
-  (`volume_router.py`); see ADR 0004. < $5/mo at brief volume.
-- **Streaming seam** (`streaming.py`) — `Trigger.AvailableNow`, same MERGE logic
-- **Pushdown discipline** — ADR 0005 + `.sqlfluff` guard against partition-column casts
+# Key Components
 
-## Trade-offs
+## Ingestion
 
-- **Delta vs Iceberg** — chose Delta for tighter Spark integration and simpler CDC.
-  Iceberg would be the pick if multi-engine (Trino/Flink) is a near-term need.
-- **Star vs snowflake** — star; dim cardinality doesn't justify normalization.
-- **EMR vs Glue** — Glue jobs for serverless ops; EMR if job runtime > 30 min.
+### What
+Fetch payment data from the provider API and store raw files in S3.
+
+### Why
+Preserve original source data for auditing and replay purposes.
+
+### Outcome
+Reliable and traceable raw data storage.
+
+---
+
+## Data Validation
+
+### What
+Validate incoming records using Pydantic models.
+
+### Why
+Ensure only valid data enters the processing pipeline.
+
+### Outcome
+Improved data quality and reduced downstream issues.
+
+---
+
+## Quarantine Process
+
+### What
+Store invalid records separately.
+
+### Why
+Prevent bad data from impacting reporting.
+
+### Outcome
+Easy investigation and recovery of problematic records.
+
+---
+
+## Bronze to Silver Processing
+
+### What
+Transform raw JSON into Delta tables using PySpark.
+
+### Why
+Create a clean and standardized transaction dataset.
+
+### Outcome
+Reliable and analytics-ready transaction records.
+
+---
+
+## Deduplication
+
+### What
+Remove duplicate transactions using transaction identifiers.
+
+### Why
+Prevent revenue inflation and inaccurate reporting.
+
+### Outcome
+Accurate transaction counts and revenue calculations.
+
+---
+
+## Delta Lake Merge Strategy
+
+### What
+Use MERGE operations based on transaction_id.
+
+### Why
+Handle late-arriving records and status updates.
+
+### Outcome
+Accurate and up-to-date transaction history.
+
+---
+
+## Gold Layer
+
+### What
+Create fact tables, dimensions, and aggregated KPI tables.
+
+### Why
+Support business reporting and analytics.
+
+### Outcome
+Fast and easy access to revenue metrics.
+
+---
+
+## Currency Conversion
+
+### What
+Convert transactions into EUR using daily exchange rates.
+
+### Why
+Standardize reporting across currencies.
+
+### Outcome
+Consistent financial reporting.
+
+---
+
+## Data Quality Framework
+
+### What
+Implement reusable validation and business rules.
+
+### Why
+Maintain trust in analytical datasets.
+
+### Outcome
+Consistent quality monitoring.
+
+---
+
+## Audit and Metadata Tables
+
+### What
+Track pipeline executions, row counts, and processing status.
+
+### Why
+Support monitoring and troubleshooting.
+
+### Outcome
+Improved operational visibility.
+
+---
+
+## Exactly-Once Processing
+
+### What
+Use watermarks and ingestion tracking.
+
+### Why
+Prevent duplicate processing.
+
+### Outcome
+Reliable and repeatable data loads.
+
+---
+
+## Late Arriving Data Handling
+
+### What
+Reprocess recent historical data.
+
+### Why
+Capture transaction updates and corrections.
+
+### Outcome
+Accurate reporting over time.
+
+---
+
+## Monitoring and Alerting
+
+### What
+CloudWatch alarms and Slack notifications.
+
+### Why
+Detect failures quickly.
+
+### Outcome
+Reduced incident response time.
+
+---
+
+## Security and Governance
+
+### What
+Encryption, access controls, and data masking.
+
+### Why
+Protect sensitive payment information.
+
+### Outcome
+Secure and compliant platform.
+
+---
+
+## Airflow Orchestration
+
+### What
+Manage workflow scheduling and dependencies.
+
+### Why
+Automate end-to-end processing.
+
+### Outcome
+Reliable and maintainable ETL execution.
+
+---
+
+# Data Model
+
+## Fact Table
+
+### fact_payment_transaction
+- Transaction ID
+- Game ID
+- Currency
+- Amount
+- EUR Amount
+- Transaction Status
+- Transaction Date
+
+## Dimension Tables
+
+### dim_game
+Stores game attributes.
+
+### dim_currency
+Stores currency details.
+
+### dim_date
+Stores calendar information.
+
+### fx_rate_daily
+Stores daily exchange rates.
+
+---
+
+# Technologies Used
+
+- Python
+- PySpark
+- Apache Airflow
+- AWS S3
+- AWS Glue Catalog
+- AWS Athena
+- Delta Lake
+- CloudWatch
+- Slack Alerts
+- Terraform
+
+---
+
+# Business Benefits
+
+- Automated payment data ingestion
+- High-quality and trusted reporting
+- Scalable architecture for future growth
+- Cost-optimized processing
+- Improved operational monitoring
+- Secure and compliant data platform
