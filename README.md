@@ -93,6 +93,23 @@ Open http://localhost:8080 for the Airflow UI; trigger `payments_etl`.
 - **ADRs** in `docs/decisions/` documenting Delta, MERGE, Airflow choices
 - **CI**: ruff, black, mypy, pytest, terraform validate, checkov
 
+## Reliability & analytics layer (v0.3.0)
+
+- **Declarative DQ suite** (`dq/expectations.py`) with `fail / quarantine / warn` severities
+- **Referential integrity + reconciliation** (`dq/referential.py`) — FK orphans, silver↔gold totals
+- **Pipeline metrics** (`metrics.py`) — per-task `in/out/rejected/quarantined`; detects
+  "succeeded but rows not processed" via a balance assertion
+- **Schema evolution gate** (`schema_evolution.py`) — additive-nullable allowed; rename/retype blocked
+- **Row-level retry queue** (`retry_queue.py`) — exponential backoff, dead-letter after N attempts
+- **Structured JSON logging + OpenLineage** (`logging_setup.py`) — CloudWatch Insights + Marquez
+- **SLO views** (`sql/marts/slo_views.sql`) — freshness, completeness, accuracy
+- **CloudWatch alarms** (`infra/terraform/monitoring.tf`) on all three SLOs → SNS
+- **Security** (`infra/terraform/security.tf`) — KMS-CMK, Lake Formation masking, SSM, VPC endpoints
+- **Two cost tiers** — Spark/Delta vs Lambda+DuckDB (`serverless/`), routed by volume
+  (`volume_router.py`); see ADR 0004. < $5/mo at brief volume.
+- **Streaming seam** (`streaming.py`) — `Trigger.AvailableNow`, same MERGE logic
+- **Pushdown discipline** — ADR 0005 + `.sqlfluff` guard against partition-column casts
+
 ## Trade-offs
 
 - **Delta vs Iceberg** — chose Delta for tighter Spark integration and simpler CDC.

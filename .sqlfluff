@@ -1,0 +1,8 @@
+[sqlfluff]
+dialect = sparksql
+max_line_length = 100
+exclude_rules = L034, L044
+
+# Custom guard: flag partition-column casts that defeat pushdown (see ADR 0005).
+# sqlfluff has no native rule for this; enforced via CI grep + review:
+#   grep -RniE "cast\\(payment_date|date_format\\(payment_date" sql/ && exit 1

@@ -64,10 +64,34 @@ def payments_etl() -> None:
         return dt
 
     @task
-    def silver_to_gold(dt: str) -> None:
+    def silver_to_gold(dt: str) -> str:
         from sg_payments import silver_to_gold as s2g
 
         s2g.run(dt)
+        return dt
+
+    @task
+    def referential_checks(dt: str) -> str:
+        """FK orphans + silver<->gold reconciliation. Fails the run on violation."""
+        from sg_payments.config import settings
+        from sg_payments.dq.referential import assert_reconciliation, assert_referential
+        from sg_payments.spark import build_spark
+
+        spark = build_spark("ri")
+        assert_referential(spark, settings.gold_path)
+        assert_reconciliation(spark, settings.silver_path, settings.gold_path, dt)
+        return dt
+
+    @task
+    def replay_quarantine(dt: str) -> None:
+        """Re-attempt due rows from the retry queue; exhausted -> dead_letter."""
+        from sg_payments.retry_queue import due, reschedule
+        from sg_payments.spark import build_spark
+
+        spark = build_spark("replay")
+        pending = due(spark)
+        if pending.head(1):
+            reschedule(spark, pending)
 
     @task
     def restate_window(dt: str, days: int = 7) -> None:
@@ -82,7 +106,8 @@ def payments_etl() -> None:
 
     dt = "{{ ds }}"
     gold = silver_to_gold(dq_silver(bronze_to_silver(land_bronze(dt, "{{ run_id }}"))))
-    gold >> restate_window(dt)
+    checked = referential_checks(gold)
+    checked >> [restate_window(dt), replay_quarantine(dt)]
 
 
 dag = payments_etl()
