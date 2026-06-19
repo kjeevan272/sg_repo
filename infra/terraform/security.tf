@@ -36,9 +36,14 @@ resource "aws_ssm_parameter" "api_token" {
 resource "aws_lakeformation_data_cells_filter" "mask_price" {
   table_data {
     database_name    = aws_glue_catalog_database.gold.name
-    name             = "fact_payment_transaction"
+    name             = "mask_price_filter"
     table_catalog_id = data.aws_caller_identity.me.account_id
+    table_name       = "fact_payment_transaction"
     column_names     = ["transaction_id", "game_key", "date_key", "status"]
+
+    row_filter {
+      all_rows_wildcard {}
+    }
   }
 }
 
