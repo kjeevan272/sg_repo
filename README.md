@@ -75,6 +75,7 @@ Athena / Redshift Spectrum  →  BI
 ```bash
 pip install -e ".[dev]"
 pre-commit install
+<<<<<<< HEAD
 make local-up && make seed     # LocalStack S3 + Secrets Manager
 make test                       # ruff + black + mypy + pytest
 ```
@@ -93,6 +94,12 @@ Open http://localhost:8080 for the Airflow UI; trigger `payments_etl`.
 - **ADRs** in `docs/decisions/` documenting Delta, MERGE, Airflow choices
 - **CI**: ruff, black, mypy, pytest, terraform validate, checkov
 
+=======
+pytest
+ruff check . && black --check . && mypy src
+```
+
+>>>>>>> 7f7dbd942ad1ffb213d1713f56ab5560768d557c
 ## Trade-offs
 
 - **Delta vs Iceberg** — chose Delta for tighter Spark integration and simpler CDC.
