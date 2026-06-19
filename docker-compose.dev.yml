@@ -1,0 +1,36 @@
+version: "3.9"
+services:
+  localstack:
+    image: localstack/localstack:3.5
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: s3,secretsmanager
+      DEFAULT_REGION: eu-central-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+
+  spark:
+    image: bitnami/spark:3.5
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    depends_on: { localstack: { condition: service_healthy } }
+
+  airflow:
+    image: apache/airflow:2.9.2-python3.10
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW_CONN_AWS_DEFAULT: aws://test:test@?endpoint_url=http%3A%2F%2Flocalstack%3A4566
+      _PIP_ADDITIONAL_REQUIREMENTS: "pydantic>=2.6 tenacity boto3 pyspark delta-spark"
+    ports: ["8080:8080"]
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+    command: standalone
+    depends_on: [localstack]

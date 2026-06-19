@@ -75,9 +75,23 @@ Athena / Redshift Spectrum  →  BI
 ```bash
 pip install -e ".[dev]"
 pre-commit install
-pytest
-ruff check . && black --check . && mypy src
+make local-up && make seed     # LocalStack S3 + Secrets Manager
+make test                       # ruff + black + mypy + pytest
 ```
+
+Open http://localhost:8080 for the Airflow UI; trigger `payments_etl`.
+
+## Extras (v0.2.0)
+
+- **Exactly-once watermark** (`_ingestion_state` Delta table) — skip re-fetch on same checksum
+- **Quarantine** for contract failures → S3 prefix with the validation error attached
+- **Pydantic → Spark schema generator** — single source of truth (contract, Spark, Glue)
+- **Salted join** helper for whale-game skew
+- **Bloom filter + deletion vectors** on silver (GDPR erasure + faster MERGE)
+- **KPI anomaly z-score view** with `OK / WARN / ALERT` severity
+- **Slack `on_failure_callback`** + 7-day restatement task
+- **ADRs** in `docs/decisions/` documenting Delta, MERGE, Airflow choices
+- **CI**: ruff, black, mypy, pytest, terraform validate, checkov
 
 ## Trade-offs
 

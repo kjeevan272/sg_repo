@@ -1,7 +1,7 @@
-"""Airflow DAG: fetch → land bronze → silver MERGE → DQ → gold mart.
+"""Airflow DAG: fetch -> bronze -> silver MERGE -> DQ -> gold mart.
 
 One DAG serves both incremental (daily) and full backfill (catchup=True).
-Idempotent per logical_date via S3 key & Delta MERGE.
+Idempotent per logical_date via S3 key, watermark table, and Delta MERGE.
 """
 from __future__ import annotations
 
@@ -17,13 +17,19 @@ DEFAULT_ARGS = {
 }
 
 
+def _on_failure(context):
+    from sg_payments.alerts import slack_failure
+
+    slack_failure(context)
+
+
 @dag(
     dag_id="payments_etl",
     start_date=datetime(2025, 1, 1),
     schedule="@daily",
     catchup=True,
     max_active_runs=4,
-    default_args=DEFAULT_ARGS,
+    default_args=DEFAULT_ARGS | {"on_failure_callback": _on_failure},
     tags=["payments", "medallion", "delta"],
 )
 def payments_etl() -> None:
@@ -63,8 +69,20 @@ def payments_etl() -> None:
 
         s2g.run(dt)
 
+    @task
+    def restate_window(dt: str, days: int = 7) -> None:
+        """Re-process the last N days to absorb late-arriving status flips."""
+        from datetime import date, timedelta
+
+        from sg_payments import silver_to_gold as s2g
+
+        d = date.fromisoformat(dt)
+        for i in range(1, days + 1):
+            s2g.run((d - timedelta(days=i)).isoformat())
+
     dt = "{{ ds }}"
-    silver_to_gold(dq_silver(bronze_to_silver(land_bronze(dt, "{{ run_id }}"))))
+    gold = silver_to_gold(dq_silver(bronze_to_silver(land_bronze(dt, "{{ run_id }}"))))
+    gold >> restate_window(dt)
 
 
 dag = payments_etl()
